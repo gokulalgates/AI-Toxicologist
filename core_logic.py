@@ -99,6 +99,36 @@ class KCAnalysis(BaseModel):
     dose_response: List[str] = Field(default_factory=list, description="Dose-response information")
     evidence_quotes: Dict[str, List[str]] = Field(default_factory=dict, description="Evidence quotes keyed by KC")
 
+def _extract_balanced_json(text: str) -> Optional[str]:
+    """Extract the first balanced JSON object from text using brace counting."""
+    start = text.find('{')
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape_next = False
+    for i in range(start, len(text)):
+        c = text[i]
+        if escape_next:
+            escape_next = False
+            continue
+        if c == '\\' and in_string:
+            escape_next = True
+            continue
+        if c == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if c == '{':
+            depth += 1
+        elif c == '}':
+            depth -= 1
+            if depth == 0:
+                return text[start:i+1]
+    return None
+
+
 def _build_empty_analysis(reason: str = "No analysis available") -> Dict:
     """Build an empty analysis dict with all KCs set to NOT_MENTIONED"""
     result = {}
@@ -278,28 +308,45 @@ def analyze_abstract_with_llm(abstract_text: str, title: str, model_name: str = 
         cleaned_text = re.sub(r'```\s*', '', cleaned_text)
         cleaned_text = cleaned_text.strip()
         
-        json_match = re.search(r'\{.*\}', cleaned_text, re.DOTALL)
-        if json_match:
-            cleaned_text = json_match.group()
+        # Detect LLM refusals
+        refusal_phrases = ["i can't do that", "i cannot", "i'm unable", "i am unable", "as an ai"]
+        if any(phrase in cleaned_text.lower() for phrase in refusal_phrases) and '{' not in cleaned_text:
+            logger.warning(f"LLM refused to analyze: {cleaned_text[:100]}")
+            error_dict = _build_empty_analysis(f"LLM refused: {cleaned_text[:200]}")
+            return error_dict, current_prompt_hash
+        
+        # Extract JSON using balanced brace matching (handles extra text after JSON)
+        json_str = _extract_balanced_json(cleaned_text)
+        if json_str:
+            cleaned_text = json_str
 
+        result = None
+        # Strategy 1: Pydantic parser
         try:
             result = parser.parse(cleaned_text)
         except Exception as parse_error:
             logger.warning(f"Pydantic parsing failed: {parse_error}")
-            # Fallback: extract JSON and construct manually
-            json_match = re.search(r'\{.*\}', cleaned_text, re.DOTALL)
-            if json_match:
+        
+        # Strategy 2: json.loads + manual construction
+        if result is None and json_str:
+            try:
+                json_data = json.loads(json_str)
+                result = KCAnalysis(**json_data)
+            except Exception as json_error:
+                logger.warning(f"JSON fallback failed: {json_error}")
+                # Strategy 3: fix trailing commas and retry
                 try:
-                    json_data = json.loads(json_match.group())
+                    fixed = re.sub(r',\s*}', '}', json_str)
+                    fixed = re.sub(r',\s*]', ']', fixed)
+                    json_data = json.loads(fixed)
                     result = KCAnalysis(**json_data)
-                except Exception as json_error:
-                    logger.warning(f"JSON fallback also failed: {json_error}")
-                    error_dict = _build_empty_analysis(f"Failed to parse LLM response: {cleaned_text[:100]}...")
-                    return error_dict, current_prompt_hash
-            else:
-                logger.warning("No JSON object found in LLM response")
-                error_dict = _build_empty_analysis("No JSON object found in LLM response")
-                return error_dict, current_prompt_hash
+                except Exception:
+                    pass
+        
+        if result is None:
+            logger.warning(f"All JSON parsing strategies failed for response: {cleaned_text[:200]}...")
+            error_dict = _build_empty_analysis(f"Failed to parse LLM response: {cleaned_text[:100]}...")
+            return error_dict, current_prompt_hash
         
         # Normalize reasoning if it's a dict (common LLM artifact)
         reasoning_val = result.reasoning
