@@ -1,0 +1,17 @@
+# Development dependencies for code quality tools
+# Install with: pip install -r requirements-dev.txt
+
+# Linting and code formatting
+ruff>=0.1.0  # Fast Python linter and formatter (replaces flake8, isort, black)
+isort>=5.12.0  # Alternative import sorter (ruff can also handle this)
+
+# Type checking
+mypy>=1.5.0  # Static type checker
+types-requests>=2.31.0  # Type stubs for requests library
+
+# Testing (if not already in main requirements)
+pytest>=7.0.0
+pytest-cov>=4.1.0  # Coverage reporting
+
+# Pre-commit hooks (optional but recommended)
+pre-commit>=3.4.0  # Git hooks for running checks before commits

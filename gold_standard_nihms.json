@@ -1,0 +1,45 @@
+[
+  {
+    "pmid": "nihms-1779672",
+    "chemical_name": "Acetaminophen",
+    "is_relevant": true,
+    "kc_assessments": {
+      "KC1": "SUPPORTED",
+      "KC2": "SUPPORTED",
+      "KC3": "SUPPORTED",
+      "KC4": "SUPPORTED",
+      "KC5": "SUPPORTED",
+      "KC6": "SUPPORTED",
+      "KC7": "SUPPORTED",
+      "KC8": "SUPPORTED",
+      "KC9": "NOT_MENTIONED",
+      "KC10": "NOT_MENTIONED",
+      "KC11": "NOT_MENTIONED",
+      "KC12": "SUPPORTED"
+    },
+    "rob_overall": "Low",
+    "rob_domains": {
+      "Selection Bias": "Low",
+      "Performance Bias": "Low",
+      "Detection Bias": "Low",
+      "Reporting Bias": "Low"
+    },
+    "certainty_assessments": {
+      "KC1": "Moderate",
+      "KC2": "Moderate",
+      "KC3": "Moderate",
+      "KC4": "Moderate",
+      "KC5": "Moderate",
+      "KC6": "Moderate",
+      "KC7": "Moderate",
+      "KC8": "Moderate",
+      "KC9": "Very Low",
+      "KC10": "Very Low",
+      "KC11": "Very Low",
+      "KC12": "Moderate"
+    },
+    "reviewer_id": "expert_consensus_rusyn_et_al_2021",
+    "review_date": "2021-12-01",
+    "notes": "Expert consensus from Rusyn et al. Hepatology 2021. Paper explicitly states: 'Acetaminophen exhibits many KCs of hepatotoxicants (KCs 1\u20138 and 12)'"
+  }
+]
