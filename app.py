@@ -632,7 +632,7 @@ def analyze_chemical(
     start_time = time.time()
     
     if not chemical_name.strip():
-        return "Please enter a chemical name.", None, None, None, None, None, None
+        return "Please enter a chemical name.", None, None, None, None, None, None, None, [], [], {}, []
     
     # Normalize model names (fix common typos/old names)
     def normalize_model_name(model_name: str) -> str:
@@ -733,7 +733,7 @@ Search terms tried: {search_terms_display}
 Suggestions:
 - Try using a different common name for this chemical
 - Check if the chemical name spelling is correct
-- The chemical may not have published research on liver/hepatotoxicity""", None, None, None, None, None, None
+- The chemical may not have published research on liver/hepatotoxicity""", None, None, None, None, None, None, None, [], [], {}, []
         
         # Relevance Gatekeeper: Filter abstracts for liver toxicity relevance
         logger.info("STEP 2: RELEVANCE FILTERING")
@@ -783,7 +783,7 @@ Suggestions:
 PubChem CID: {cid if cid else 'Not found'}
 
 Found {len(all_abstracts)} abstracts, but none were relevant to liver toxicity of this chemical.
-The abstracts may discuss other aspects (e.g., cancer efficacy, metabolism elsewhere) but not hepatotoxicity.""", None, None, None, None, None, None
+The abstracts may discuss other aspects (e.g., cancer efficacy, metabolism elsewhere) but not hepatotoxicity.""", None, None, None, None, None, None, None, [], [], {}, []
         
         # Active Learning: Select most informative abstracts (if enabled)
         # Only apply active learning if we have a limit and more abstracts than the limit
