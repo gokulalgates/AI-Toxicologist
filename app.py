@@ -286,11 +286,9 @@ if not logger.handlers:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO if not config.debug else logging.DEBUG)
 
-# Only override if not set via environment variable
+# Override default analyze limit to 500 unless user explicitly set via env var
 if os.getenv("MAX_ABSTRACTS_ANALYZE") is None:
-    # Default to 500 if not configured, but respect user config
-    if config.search.max_abstracts_analyze == 20:  # Default value
-        config.search.max_abstracts_analyze = 500
+    config.search.max_abstracts_analyze = 500
 
 # Setup GPU environment if available
 gpu_info = check_gpu_available()

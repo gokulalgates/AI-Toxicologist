@@ -14,9 +14,9 @@ class SearchConfig:
     """Configuration for PubMed search and literature retrieval"""
     # Literature limits
     # PERFORMANCE: Reduced defaults for faster analysis (can be overridden via env vars)
-    max_abstracts_initial: int = 75  # Initial fetch from PubMed (reduced from 100 for speed)
-    max_abstracts_analyze: int = 15  # Max abstracts to analyze after relevance filtering (reduced from 20 for speed)
-    max_search_terms: int = 8  # Max search terms to use (reduced from 10 for speed)
+    max_abstracts_initial: int = 100  # Initial fetch from PubMed
+    max_abstracts_analyze: int = 20  # Max abstracts to analyze after relevance filtering
+    max_search_terms: int = 10  # Max search terms to use
     
     # Abstract processing
     # IMPROVEMENT: Increased context window - modern models (llama3.2, mixtral) support 128K tokens

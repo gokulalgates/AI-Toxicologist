@@ -99,6 +99,23 @@ class KCAnalysis(BaseModel):
     dose_response: List[str] = Field(default_factory=list, description="Dose-response information")
     evidence_quotes: Dict[str, List[str]] = Field(default_factory=dict, description="Evidence quotes keyed by KC")
 
+def _build_empty_analysis(reason: str = "No analysis available") -> Dict:
+    """Build an empty analysis dict with all KCs set to NOT_MENTIONED"""
+    result = {}
+    for i in range(1, 13):
+        kc_key = f"KC{i}"
+        result[kc_key] = False
+        result[f"{kc_key}_status"] = "NOT_MENTIONED"
+        result[f"kc{i}_status"] = "NOT_MENTIONED"
+    result["reasoning"] = reason
+    result["species"] = "Unknown"
+    result["study_type"] = "Unknown"
+    result["causal_links"] = []
+    result["dose_response"] = []
+    result["evidence_quotes"] = {}
+    return result
+
+
 def standardize_chemical_name(chemical_name: str) -> Tuple[str, Optional[str], List[str]]:
     """Standardize chemical name using PubChem and get synonyms"""
     chemical_name = chemical_name.lower()
@@ -175,6 +192,7 @@ Abstract: {abstract_text}"""
         if not is_relevant:
             is_relevant = answer.startswith("Y") and not answer.startswith("NO")
         
+        logger.info(f"Relevance check for '{title[:50]}...': {answer[:20]} -> {'RELEVANT' if is_relevant else 'EXCLUDED'}")
         return is_relevant
     
     except Exception as e:
@@ -266,29 +284,61 @@ def analyze_abstract_with_llm(abstract_text: str, title: str, model_name: str = 
 
         try:
             result = parser.parse(cleaned_text)
-            
-            # Normalize reasoning if it's a dict (common LLM artifact)
-            reasoning_val = result.reasoning
-            if isinstance(reasoning_val, dict) and 'text' in reasoning_val and isinstance(reasoning_val['text'], list):
-                result.reasoning = "\n".join(reasoning_val['text'])
-            elif isinstance(reasoning_val, dict):
-                result.reasoning = json.dumps(reasoning_val)
-            
-            return result.model_dump(), current_prompt_hash
-        except Exception:
-             # Very basic fallback for now to avoid the 200 lines of repair logic I saw in app.py
-             # Ideally we copy that too, but for refactoring purpose this is minimal viable
-             return {
-                **{{f"kc{i}_status": "NOT_MENTIONED" for i in range(1, 13)}},
-                "reasoning": f"Failed to parse LLM response: {cleaned_text[:100]}...",
-                "causal_links": [],
-                "dose_response": [],
-                "evidence_quotes": {}
-             }, current_prompt_hash
+        except Exception as parse_error:
+            logger.warning(f"Pydantic parsing failed: {parse_error}")
+            # Fallback: extract JSON and construct manually
+            json_match = re.search(r'\{.*\}', cleaned_text, re.DOTALL)
+            if json_match:
+                try:
+                    json_data = json.loads(json_match.group())
+                    result = KCAnalysis(**json_data)
+                except Exception as json_error:
+                    logger.warning(f"JSON fallback also failed: {json_error}")
+                    error_dict = _build_empty_analysis(f"Failed to parse LLM response: {cleaned_text[:100]}...")
+                    return error_dict, current_prompt_hash
+            else:
+                logger.warning("No JSON object found in LLM response")
+                error_dict = _build_empty_analysis("No JSON object found in LLM response")
+                return error_dict, current_prompt_hash
+        
+        # Normalize reasoning if it's a dict (common LLM artifact)
+        reasoning_val = result.reasoning
+        if isinstance(reasoning_val, dict) and 'text' in reasoning_val and isinstance(reasoning_val['text'], list):
+            result.reasoning = "\n".join(reasoning_val['text'])
+        elif isinstance(reasoning_val, dict):
+            result.reasoning = json.dumps(reasoning_val)
+        
+        # Build output dict with backward-compatible boolean keys
+        kc_dict = {}
+        for i in range(1, 13):
+            kc_key = f"KC{i}"
+            status = getattr(result, f"kc{i}_status", "NOT_MENTIONED")
+            kc_dict[kc_key] = status == "SUPPORTED"
+            kc_dict[f"{kc_key}_status"] = status
+            kc_dict[f"kc{i}_status"] = status
+        
+        kc_dict["reasoning"] = getattr(result, "reasoning", "No reasoning provided")
+        kc_dict["species"] = getattr(result, "species", "Unknown")
+        kc_dict["study_type"] = getattr(result, "study_type", "Unknown")
+        kc_dict["dose_response"] = getattr(result, "dose_response", [])
+        kc_dict["evidence_quotes"] = getattr(result, "evidence_quotes", {})
+        
+        causal_links = getattr(result, "causal_links", [])
+        kc_dict["causal_links"] = [
+            {"source": link.source, "target": link.target,
+             "evidence": link.evidence, "strength": getattr(link, "strength", "MODERATE")}
+            for link in causal_links
+        ]
+        
+        return kc_dict, current_prompt_hash
 
+    except (LLMError, LLMTimeoutError) as e:
+        logger.error(f"LLM error analyzing abstract: {e}")
+        raise e
     except Exception as e:
         logger.error(f"Error in analyze_abstract_with_llm: {e}")
-        raise e
+        error_dict = _build_empty_analysis(f"Error: {str(e)}")
+        return error_dict, prompt_hash or "error"
 
 def fetch_pubmed_abstracts(search_terms: List[str], max_results: Optional[int] = None) -> Tuple[List[Dict[str, str]], Dict]:
     """Fetch abstracts from PubMed using enhanced MeSH-aware search"""

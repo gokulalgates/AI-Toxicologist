@@ -18,9 +18,9 @@ class TestConfig(unittest.TestCase):
         """Test default configuration values"""
         config = get_config()
         
-        self.assertEqual(config.search.max_abstracts_initial, 75)
-        self.assertEqual(config.search.max_abstracts_analyze, 15)
-        self.assertEqual(config.search.max_search_terms, 8)
+        self.assertEqual(config.search.max_abstracts_initial, 100)
+        self.assertEqual(config.search.max_abstracts_analyze, 20)
+        self.assertEqual(config.search.max_search_terms, 10)
         self.assertEqual(config.llm.temperature, 0.1)
         self.assertEqual(config.llm.max_retries, 3)
     
