@@ -142,7 +142,19 @@ def check_relevance(abstract_text: str, title: str, chemical_name: str, model_na
         )
         
         SYSTEM_PROMPT_GATEKEEPER = """### TASK
-Determine if the following abstract describes **ADVERSE EFFECTS**, **TOXICITY**, or **SAFETY HAZARDS** of the chemical '{chemical_name}' specifically in the **LIVER**.
+Determine if the following abstract is relevant to studying the effects of '{chemical_name}' (or any of its synonyms/trade names) on the **LIVER**.
+
+A paper is relevant if it discusses ANY of the following in relation to the liver:
+- Toxicity, adverse effects, or safety concerns
+- Mechanisms of action (e.g., oxidative stress, bioactivation, metabolism)
+- Cell death, inflammation, fibrosis, cholestasis, or mitochondrial effects
+- In vivo or in vitro hepatotoxicity studies
+- Drug-induced liver injury (DILI)
+- Hepatocyte or liver cell experiments
+- Liver biomarkers (ALT, AST, bilirubin, etc.)
+
+The chemical may appear under common names, trade names, abbreviations, or chemical identifiers.
+
 ### OUTPUT
 Answer with a single word: "YES" or "NO".
 

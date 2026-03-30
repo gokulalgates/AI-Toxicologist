@@ -752,9 +752,10 @@ Suggestions:
                 progress(0.15 + 0.15 * (idx / len(all_abstracts)), 
                         desc=f"Step 2/6: Checking relevance ({idx+1}/{len(all_abstracts)}) | Est. remaining: {remaining:.1f}s")
             
-            # Use first model for relevance checking (or could use consensus)
+            # Use the original common name for relevance checking (not the IUPAC name,
+            # which abstracts rarely mention)
             if check_relevance(abstract.get("abstract", ""), abstract.get("title", ""), 
-                            standardized_name, model_names[0]):
+                            original_chemical_name, model_names[0]):
                 relevant_abstracts.append(abstract)
             else:
                 excluded_title_abstract.append(abstract)
