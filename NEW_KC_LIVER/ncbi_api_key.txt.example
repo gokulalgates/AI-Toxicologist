@@ -1,9 +1,0 @@
-# NCBI API Key
-# 
-# Instructions:
-# 1. Get your API key from: https://www.ncbi.nlm.nih.gov/account/settings/
-# 2. Copy this file and rename it to 'ncbi_api_key.txt' (remove .example)
-# 3. Paste your API key in this file (on a single line, no quotes)
-# 
-# Example:
-# abc123def456ghi789jkl012mno345pqr678stu901vwx234yz

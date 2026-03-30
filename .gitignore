@@ -46,6 +46,11 @@ cursor*
 # Claude Code memory
 .claude/
 
+# API keys and secrets
+APIKEY
+*.key
+ncbi_api_key.txt
+
 # Backup folders
 _backup*/
 backup*/
