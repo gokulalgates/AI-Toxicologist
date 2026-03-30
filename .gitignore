@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Results and outputs
+results/
+*.pptx
+*.pdf
+*.png
+*.jpg
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+~$*
+
+# Cursor files
+cursor*
+.cursor/
+
+# Claude settings
+.claude/
+
+# API keys and secrets
+APIKEY
+*.key
+*.secret
+
+# Backup folders
+_backup*/
+backup*/
+
+# Prompt archives (can be large)
+prompt_archives/
+
+# Experiment snapshots (can be large)
+experiment_snapshots/
