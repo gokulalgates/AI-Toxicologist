@@ -1524,9 +1524,7 @@ def create_interface():
                                 "mixtral",
                                 "phi3",
                                 "gemma2",
-                                "qwen2.5",
-                                "deepseek-r1:70b",
-                                "deepseek-v3"
+                                "qwen2.5"
                             ],
                             value=["llama3.2"],
                             info="Select 1+ models. Multiple models = Multi-Reviewer mode with consensus"

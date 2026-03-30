@@ -22,13 +22,13 @@ from exceptions import (
 )
 from search_enhanced import fetch_pubmed_enhanced, get_chemical_synonyms_enhanced
 from rag_system import get_rag_system
-from prompt_templates import get_prompt_for_abstract
-from prompt_improvements import (
+from prompt_templates import get_prompt_for_abstract  # kept for potential custom prompt modes
+from prompt_improvements import (  # kept for potential custom prompt modes
     get_enhanced_prompt_with_synonyms, 
     get_acetaminophen_specific_prompt, 
     get_liberal_prompt
 )
-from causal_reasoning import enhance_causal_reasoning_prompt
+from causal_reasoning import enhance_causal_reasoning_prompt  # kept for potential custom prompt modes
 from provenance import hash_prompt
 
 # Configure logging
@@ -229,13 +229,53 @@ Abstract: {abstract_text}"""
         logger.warning(f"Relevance check failed for '{title[:50]}...', including abstract by default: {e}")
         return True
 
+COMPACT_SYSTEM_PROMPT = """You are a toxicology expert. Analyze the abstract for ALL hepatotoxicity mechanisms present.
+
+IMPORTANT: Check EVERY KC carefully. Many abstracts describe multiple mechanisms. Mark ALL that apply as SUPPORTED.
+
+KC1: Reactive/Bioactivation - metabolism, reactive metabolite, NAPQI, CYP450, CYP2E1, CYP3A4, bioactivation, electrophile, phase I, hydroxylation, glucuronidation, sulfation
+KC2: Cell Death - apoptosis, necrosis, hepatocyte death, liver injury, cytotoxicity, cell killing, caspase, TUNEL, ALT elevation, AST elevation, hepatocellular damage
+KC3: Proliferation/Regeneration - cell proliferation, regeneration, mitosis, compensatory hyperplasia, liver repair, hepatocyte recovery, cell cycle, Ki-67, PCNA, growth factor
+KC4: Transport Disruption - transporter, bile acid transport, BSEP, MRP, OATP, uptake, efflux, P-glycoprotein, ABC transporter, drug accumulation
+KC5: Oxidative Stress - ROS, reactive oxygen, glutathione depletion, GSH, lipid peroxidation, antioxidant, SOD, catalase, Nrf2, MDA, redox, thioredoxin, 4-HNE
+KC6: Immune Response - inflammation, inflammatory, cytokines, TNF-alpha, IL-1beta, IL-6, neutrophils, Kupffer cells, macrophages, immune, NF-kB, innate immunity, adaptive immunity, sterile inflammation, DAMPs, TLR
+KC7: Mitochondrial Dysfunction - mitochondria, mitochondrial damage, ATP depletion, membrane potential, MPT, electron transport chain, respiratory chain, cytochrome c release, mitochondrial swelling, Bcl-2
+KC8: Stress Signaling - JNK, c-Jun, MAPK, p38, NF-kB, ERK, kinase, signaling pathway, stress response, ER stress, UPR, unfolded protein, ASK1, RIPK
+KC9: Cholestasis - cholestasis, bile flow, bile accumulation, cholestatic, bilirubin elevation, jaundice
+KC10: Cytoskeleton Disruption - cytoskeleton, keratin, actin, microtubules, cell morphology, Mallory-Denk bodies, ballooning
+KC11: Liver Fibrosis - fibrosis, collagen, stellate cells, ECM, scarring, cirrhosis, TGF-beta, alpha-SMA
+KC12: Metabolism Disruption - lipid metabolism, steatosis, fatty acid, protein synthesis, metabolic disruption, lipid accumulation, triglycerides, ammonia, urea cycle, gluconeogenesis
+
+Return ONLY valid JSON with ALL 12 KC statuses. Example:
+{"kc1_status":"SUPPORTED","kc2_status":"SUPPORTED","kc3_status":"NOT_MENTIONED","kc4_status":"NOT_MENTIONED","kc5_status":"SUPPORTED","kc6_status":"SUPPORTED","kc7_status":"SUPPORTED","kc8_status":"SUPPORTED","kc9_status":"NOT_MENTIONED","kc10_status":"NOT_MENTIONED","kc11_status":"NOT_MENTIONED","kc12_status":"SUPPORTED","reasoning":"KC1: metabolized by CYP2E1 to NAPQI. KC2: causes hepatocellular necrosis. KC5: depletes GSH causing oxidative stress. KC6: activates inflammatory response. KC7: mitochondrial dysfunction. KC8: JNK activation. KC12: disrupts lipid metabolism","species":"Mouse","study_type":"In Vivo"}"""
+
+
+def _extract_kc_statuses_regex(text: str) -> Optional[Dict]:
+    """Last-resort extraction: scan text for KC status mentions using regex."""
+    result = {}
+    for i in range(1, 13):
+        pattern = rf'"?kc{i}_status"?\s*:\s*"?(SUPPORTED|REFUTED|NOT_MENTIONED|ASSOCIATED|CAUSALLY_LINKED)"?'
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            result[f"kc{i}_status"] = match.group(1).upper()
+    if len(result) >= 6:
+        for i in range(1, 13):
+            result.setdefault(f"kc{i}_status", "NOT_MENTIONED")
+        return result
+    return None
+
+
 @retry_with_backoff(exceptions=(LLMError, LLMTimeoutError, Exception))
 def analyze_abstract_with_llm(abstract_text: str, title: str, model_name: str = "llama3.1", 
                               prompt_hash: Optional[str] = None, fulltext: Optional[str] = None,
                               chemical_name: Optional[str] = None, use_rag: bool = True,
                               use_hierarchical: bool = True, search_terms: Optional[List[str]] = None,
                               prompt_mode: Optional[str] = None, custom_prompt: Optional[str] = None) -> Tuple[Dict, str]:
-    """Analyze abstract against 12 KC definitions using LLM"""
+    """Analyze abstract against 12 KC definitions using LLM.
+    
+    Uses a compact prompt optimized for small local models (llama3.2 3B).
+    Falls back through multiple parsing strategies: JSON -> regex extraction.
+    """
     try:
         llm = ChatOllama(
             model=model_name,
@@ -243,139 +283,118 @@ def analyze_abstract_with_llm(abstract_text: str, title: str, model_name: str = 
             timeout=config.search.llm_timeout,
         )
         
-        kc_definitions_text = "\n".join([f"{kc}: {definition}" for kc, definition in KC_DEFINITIONS.items()])
-        parser = PydanticOutputParser(pydantic_object=KCAnalysis)
-        format_instructions = parser.get_format_instructions()
-        format_instructions_escaped = format_instructions
-        
-        rag_context = None
-        if use_rag and chemical_name:
-            try:
-                rag_system = get_rag_system()
-                rag_context = rag_system.build_rag_context(abstract_text, chemical_name)
-            except Exception as e:
-                logger.warning(f"RAG context generation failed: {e}")
-        
-        prompt_mode_str = str(prompt_mode).strip() if prompt_mode is not None else ""
-        effective_prompt_mode = prompt_mode_str if prompt_mode_str else (
-            getattr(config.analysis, 'prompt_mode', 'enhanced') if config.analysis.enable_enhanced_prompts else 'standard'
-        )
-        
-        base_prompt = ""
-        # Simplified prompt selection logic for core_logic (can be expanded)
-        if effective_prompt_mode == "custom" and custom_prompt:
-             base_prompt = custom_prompt.replace("{kc_definitions}", kc_definitions_text).replace("{format_instructions}", format_instructions_escaped)
-        elif effective_prompt_mode in ["enhanced", "liberal", "acetaminophen-specific"] or config.analysis.enable_enhanced_prompts:
-             base_prompt = get_enhanced_prompt_with_synonyms(kc_definitions_text, format_instructions_escaped)
-        else:
-             base_prompt = get_prompt_for_abstract(abstract_text, fulltext, kc_definitions_text, format_instructions_escaped, rag_context)
-
-        base_prompt_enhanced = enhance_causal_reasoning_prompt(base_prompt)
-        
-        SYSTEM_PROMPT_ANALYST = base_prompt_enhanced
-        
-        if "{kc_definitions}" in SYSTEM_PROMPT_ANALYST or "{format_instructions}" in SYSTEM_PROMPT_ANALYST:
-            SYSTEM_PROMPT_ANALYST = SYSTEM_PROMPT_ANALYST.format(
-                kc_definitions=kc_definitions_text,
-                format_instructions=format_instructions
-            )
-        
         text_to_analyze = abstract_text
         if use_hierarchical and fulltext:
-             text_to_analyze = fulltext[:config.search.abstract_truncate_length]
+            text_to_analyze = fulltext[:config.search.abstract_truncate_length]
 
-        system_message_object = SystemMessage(content=SYSTEM_PROMPT_ANALYST)
+        system_prompt = COMPACT_SYSTEM_PROMPT
+        current_prompt_hash = prompt_hash or hash_prompt(system_prompt)
         
-        prompt_template_with_format = ChatPromptTemplate.from_messages([
+        system_message_object = SystemMessage(content=system_prompt)
+        prompt_template = ChatPromptTemplate.from_messages([
             system_message_object,
-            ("human", "Title: {title}\n\nAbstract: {abstract}\n\nAnalyze this abstract against the 12 Key Characteristics. Return ONLY the raw JSON."),
+            ("human", "Title: {title}\n\nAbstract: {abstract}\n\nReturn ONLY the JSON."),
         ])
         
-        full_prompt_text = SYSTEM_PROMPT_ANALYST
-        current_prompt_hash = prompt_hash or hash_prompt(full_prompt_text)
-        
-        chain = prompt_template_with_format | llm
-        
+        chain = prompt_template | llm
         raw_response = chain.invoke({
             "title": title,
-            "abstract": text_to_analyze
+            "abstract": text_to_analyze[:4000]
         })
         
         response_text = raw_response.content if hasattr(raw_response, 'content') else str(raw_response)
         
-        # Clean response
         cleaned_text = re.sub(r'```json\s*', '', response_text)
         cleaned_text = re.sub(r'```\s*', '', cleaned_text)
         cleaned_text = cleaned_text.strip()
         
-        # Detect LLM refusals
         refusal_phrases = ["i can't do that", "i cannot", "i'm unable", "i am unable", "as an ai"]
         if any(phrase in cleaned_text.lower() for phrase in refusal_phrases) and '{' not in cleaned_text:
             logger.warning(f"LLM refused to analyze: {cleaned_text[:100]}")
-            error_dict = _build_empty_analysis(f"LLM refused: {cleaned_text[:200]}")
-            return error_dict, current_prompt_hash
+            return _build_empty_analysis(f"LLM refused: {cleaned_text[:200]}"), current_prompt_hash
         
-        # Extract JSON using balanced brace matching (handles extra text after JSON)
+        json_data = None
+        
+        # Strategy 1: Extract balanced JSON and parse
         json_str = _extract_balanced_json(cleaned_text)
         if json_str:
-            cleaned_text = json_str
-
-        result = None
-        # Strategy 1: Pydantic parser
-        try:
-            result = parser.parse(cleaned_text)
-        except Exception as parse_error:
-            logger.warning(f"Pydantic parsing failed: {parse_error}")
-        
-        # Strategy 2: json.loads + manual construction
-        if result is None and json_str:
             try:
                 json_data = json.loads(json_str)
-                result = KCAnalysis(**json_data)
-            except Exception as json_error:
-                logger.warning(f"JSON fallback failed: {json_error}")
-                # Strategy 3: fix trailing commas and retry
+            except json.JSONDecodeError:
+                fixed = re.sub(r',\s*}', '}', json_str)
+                fixed = re.sub(r',\s*]', ']', fixed)
                 try:
-                    fixed = re.sub(r',\s*}', '}', json_str)
-                    fixed = re.sub(r',\s*]', ']', fixed)
                     json_data = json.loads(fixed)
-                    result = KCAnalysis(**json_data)
-                except Exception:
+                except json.JSONDecodeError:
                     pass
         
-        if result is None:
-            logger.warning(f"All JSON parsing strategies failed for response: {cleaned_text[:200]}...")
-            error_dict = _build_empty_analysis(f"Failed to parse LLM response: {cleaned_text[:100]}...")
-            return error_dict, current_prompt_hash
+        # Strategy 2: Try full cleaned text as JSON
+        if json_data is None:
+            try:
+                json_data = json.loads(cleaned_text)
+            except json.JSONDecodeError:
+                pass
         
-        # Normalize reasoning if it's a dict (common LLM artifact)
-        reasoning_val = result.reasoning
-        if isinstance(reasoning_val, dict) and 'text' in reasoning_val and isinstance(reasoning_val['text'], list):
-            result.reasoning = "\n".join(reasoning_val['text'])
-        elif isinstance(reasoning_val, dict):
-            result.reasoning = json.dumps(reasoning_val)
+        # Strategy 3: Regex extraction of individual KC statuses from raw text
+        if json_data is None:
+            logger.warning(f"JSON parsing failed, trying regex extraction: {cleaned_text[:150]}...")
+            regex_result = _extract_kc_statuses_regex(cleaned_text)
+            if regex_result:
+                json_data = regex_result
+                logger.info("Regex extraction recovered KC statuses")
         
-        # Build output dict with backward-compatible boolean keys
+        if json_data is None:
+            logger.warning(f"All parsing strategies failed for: {cleaned_text[:200]}...")
+            return _build_empty_analysis(f"Parse failed: {cleaned_text[:100]}..."), current_prompt_hash
+        
+        # Normalize: the LLM may return nested or extra fields - extract what we need
         kc_dict = {}
         for i in range(1, 13):
             kc_key = f"KC{i}"
-            status = getattr(result, f"kc{i}_status", "NOT_MENTIONED")
+            status = (
+                json_data.get(f"kc{i}_status")
+                or json_data.get(f"KC{i}_status")
+                or json_data.get(f"kc{i}")
+                or json_data.get(kc_key)
+                or "NOT_MENTIONED"
+            )
+            if isinstance(status, bool):
+                status = "SUPPORTED" if status else "NOT_MENTIONED"
+            status = str(status).upper().strip().strip('"')
+            if status not in ("SUPPORTED", "REFUTED", "NOT_MENTIONED", "ASSOCIATED", "CAUSALLY_LINKED"):
+                status = "SUPPORTED" if any(w in status.lower() for w in ("support", "yes", "true", "present")) else "NOT_MENTIONED"
+            
             kc_dict[kc_key] = status == "SUPPORTED"
             kc_dict[f"{kc_key}_status"] = status
             kc_dict[f"kc{i}_status"] = status
         
-        kc_dict["reasoning"] = getattr(result, "reasoning", "No reasoning provided")
-        kc_dict["species"] = getattr(result, "species", "Unknown")
-        kc_dict["study_type"] = getattr(result, "study_type", "Unknown")
-        kc_dict["dose_response"] = getattr(result, "dose_response", [])
-        kc_dict["evidence_quotes"] = getattr(result, "evidence_quotes", {})
+        reasoning = json_data.get("reasoning", "")
+        if isinstance(reasoning, dict):
+            reasoning = json.dumps(reasoning)
+        elif isinstance(reasoning, list):
+            reasoning = "; ".join(str(r) for r in reasoning)
+        kc_dict["reasoning"] = reasoning or "No reasoning provided"
+        kc_dict["species"] = str(json_data.get("species", "Unknown"))
+        kc_dict["study_type"] = str(json_data.get("study_type", "Unknown"))
+        kc_dict["dose_response"] = json_data.get("dose_response", [])
+        if not isinstance(kc_dict["dose_response"], list):
+            kc_dict["dose_response"] = []
+        kc_dict["evidence_quotes"] = json_data.get("evidence_quotes", {})
+        if not isinstance(kc_dict["evidence_quotes"], dict):
+            kc_dict["evidence_quotes"] = {}
         
-        causal_links = getattr(result, "causal_links", [])
-        kc_dict["causal_links"] = [
-            {"source": link.source, "target": link.target,
-             "evidence": link.evidence, "strength": getattr(link, "strength", "MODERATE")}
-            for link in causal_links
-        ]
+        raw_links = json_data.get("causal_links", [])
+        if isinstance(raw_links, list):
+            kc_dict["causal_links"] = [
+                {"source": l.get("source", ""), "target": l.get("target", ""),
+                 "evidence": l.get("evidence", ""), "strength": l.get("strength", "MODERATE")}
+                for l in raw_links if isinstance(l, dict)
+            ]
+        else:
+            kc_dict["causal_links"] = []
+        
+        supported_count = sum(1 for i in range(1, 13) if kc_dict.get(f"kc{i}_status") == "SUPPORTED")
+        logger.info(f"Analysis complete: {supported_count}/12 KCs supported for '{title[:50]}...'")
         
         return kc_dict, current_prompt_hash
 
@@ -384,8 +403,7 @@ def analyze_abstract_with_llm(abstract_text: str, title: str, model_name: str = 
         raise e
     except Exception as e:
         logger.error(f"Error in analyze_abstract_with_llm: {e}")
-        error_dict = _build_empty_analysis(f"Error: {str(e)}")
-        return error_dict, prompt_hash or "error"
+        return _build_empty_analysis(f"Error: {str(e)}"), prompt_hash or "error"
 
 def fetch_pubmed_abstracts(search_terms: List[str], max_results: Optional[int] = None) -> Tuple[List[Dict[str, str]], Dict]:
     """Fetch abstracts from PubMed using enhanced MeSH-aware search"""
