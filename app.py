@@ -43,90 +43,152 @@ from core_logic import (
 )
 
 HELP_CONTENT_TEMPLATE = """
-🚀 Getting Started with AI Toxicologist
-This section provides guidance on how to set up, run, and interact with the AI Toxicologist application.
+# AI Toxicologist — Help & Documentation
 
-🏃‍♀️ How to Run the Application
-Ensure Ollama is Installed and Running:
-AI Toxicologist uses Ollama to run large language models locally. Download and install Ollama from https://ollama.ai.
-After installation, ensure the Ollama server is running in the background.
-Pull Required Models:
-Before running the application, you need to download the language models you wish to use. Open your terminal and pull the recommended models (or others of your choice):
+---
 
+## Getting Started
+
+This application performs a **PRISMA-compliant systematic literature review** to assess the hepatotoxicity potential of chemicals based on the **Key Characteristics of Human Hepatotoxicants** (Rusyn et al., 2021).
+
+---
+
+## Setup Instructions
+
+### 1. Install & Run Ollama
+
+AI Toxicologist uses [Ollama](https://ollama.ai) to run large language models locally.
+
+- Download and install Ollama from [https://ollama.ai](https://ollama.ai)
+- Make sure the Ollama server is running in the background before starting the app
+
+### 2. Pull Required Models
+
+Open your terminal and download the models you want to use:
+
+```
 ollama pull llama3.1
 ollama pull llama3.2
 ollama pull mixtral
-# You can also pull other models like:
-# ollama pull mistral
-# ollama pull phi3
-# ollama pull gemma2
-# ollama pull qwen2.5
-(Recommended: Use 2-3 high-end models like llama3.2, mixtral, mistral for Multi-Reviewer Mode.)
-Start the AI Toxicologist Web Application:
-Navigate to the project's root directory in your terminal.
-Run the app.py script:
+ollama pull mistral
+ollama pull phi3
+ollama pull gemma2
+ollama pull qwen2.5
+```
 
+> **Tip:** For Multi-Reviewer Mode, use 2–3 high-end models such as `llama3.2`, `mixtral`, and `mistral`.
+
+### 3. Start the Application
+
+Navigate to the project directory and run:
+
+```
 python app.py
-This will start a Gradio web server, and a link (usually http://127.0.0.1:7860/ or similar) will be displayed in your terminal. Open this link in your web browser.
-🔬 AI Toxicologist: Publication-Grade Hepatotoxicity Assessment
-This application performs a PRISMA-compliant systematic literature review to assess the hepatotoxicity potential of chemicals based on the Key Characteristics of Human Hepatotoxicants (Rusyn et al., 2021).
+```
 
-Features:
-✅ PRISMA 2020 Compliance: Flow diagrams and reporting
-✅ Enhanced Search: MeSH-aware queries with CAS/CID support
-✅ Evidence Quotes: Sentence-level evidence extraction
-✅ Provenance Tracking: Complete audit trail for reproducibility
-✅ Risk-of-Bias Assessment: LLM-based OHAT/ROBINS-I assessment with visualizations
-✅ Certainty Grading: GRADE/OHAT-style certainty ratings per KC
-✅ Evidence Profile Cards: Human-readable evidence summaries
-✅ Causal Pathway Analysis: Directed graphs showing mechanistic relationships
-✅ Multi-Reviewer Mode: Use multiple models as independent reviewers, consolidate results, and rank papers by consensus
-✅ Configurable Limits: Adjustable literature retrieval and analysis limits
-Configuration:
-Initial PubMed Fetch: Up to {MAX_ABSTRACTS_INITIAL} abstracts
-Analysis Limit: Up to {MAX_ABSTRACTS_ANALYZE} relevant abstracts analyzed
-Search Terms: Up to {MAX_SEARCH_TERMS} synonyms used
-Parallel Processing: {PARALLEL_PROCESSING_STATUS}
-GPU Acceleration: {GPU_ACCELERATION_STATUS} ({GPU_COUNT} GPU(s) detected)
-MPI Support: {MPI_SUPPORT_STATUS}
-How it works (Application Workflow):
-The Librarian: Standardizes chemical name, fetches PubMed abstracts with MeSH terms
-The Gatekeeper: Semantic filtering for liver toxicity relevance
-The Analyst: Uses AI to analyze abstracts against 12 Key Characteristics with evidence quotes
-Multi-Reviewer: Each selected model independently reviews all papers
-Consensus: Results are consolidated using majority voting
-Ranking: Papers are ranked by consensus strength and evidence quality
-The Architect: Generates Evidence Matrix, Causal Pathway Network, and PRISMA flow diagram
-🤝 Using the User Interface
-Enter a Chemical Name: Type the name of the chemical you want to analyze (e.g., "acetaminophen", "carbon tetrachloride") into the "Chemical Name" textbox.
-Select Ollama Models: Choose one or more Ollama models from the "Ollama Models" checkbox group.
-Selecting multiple models activates Multi-Reviewer Mode, where each model independently reviews papers, and their results are consolidated for higher reliability.
-Enable Optional Features:
-Enable Risk-of-Bias Assessment: Check this box to assess the risk-of-bias for each study.
-Enable Certainty Grading: Check this box to calculate the certainty of evidence per Key Characteristic.
-Start Analysis: Click the "🔍 Analyze Chemical" button to begin the systematic review.
-Review Results: The results will be displayed in various outputs, including:
-"Analysis Summary"
-"Evidence Matrix Heatmap"
-"Mechanistic Pathway Network"
-"PRISMA 2020 Flow Diagram"
-"Risk-of-Bias Heatmap" and "Risk-of-Bias Summary" (if enabled)
-"Evidence Profile Cards"
-"Risk-of-Bias Assessments" table (if enabled): Click a row to view the corresponding abstract.
-Chat with Abstracts: After analysis, you can use the "Ask Questions About Analyzed Abstracts" chatbot to query the analyzed literature.
-✨ Multi-Reviewer Mode Benefits:
-Higher reliability through consensus
-Inter-model agreement statistics (Cohen's κ)
-Papers ranked by consensus strength
-Identifies high-confidence vs. disputed findings
-Note: For best results, use 2-3 high-end models (e.g., llama3.2, mixtral, mistral). Multi-reviewer mode takes longer but provides more reliable results.
+A Gradio web server will start. Open the link shown in your terminal (typically `http://127.0.0.1:7860/`) in your browser.
 
-⚙️ Advanced Configuration (Environment Variables):
-You can adjust certain limits and parameters by setting environment variables before running app.py:
+---
 
-MAX_ABSTRACTS_INITIAL: Controls the initial PubMed fetch limit (default: {MAX_ABSTRACTS_INITIAL_DEFAULT}).
-MAX_ABSTRACTS_ANALYZE: Sets the analysis limit after filtering for relevance (default: {MAX_ABSTRACTS_ANALYZE_DEFAULT}).
-LLM_TEMPERATURE: Adjusts the LLM's creativity/randomness (default: {LLM_TEMPERATURE_DEFAULT}).
+## Features
+
+| Feature | Description |
+|---|---|
+| **PRISMA 2020 Compliance** | Flow diagrams and structured reporting |
+| **Enhanced Search** | MeSH-aware PubMed queries with CAS/CID support |
+| **Evidence Quotes** | Sentence-level evidence extraction from abstracts |
+| **Provenance Tracking** | Complete audit trail for reproducibility |
+| **Risk-of-Bias Assessment** | LLM-based OHAT/ROBINS-I assessment with visualizations |
+| **Certainty Grading** | GRADE/OHAT-style certainty ratings per Key Characteristic |
+| **Evidence Profile Cards** | Human-readable evidence summaries |
+| **Causal Pathway Analysis** | Directed graphs showing mechanistic relationships |
+| **Multi-Reviewer Mode** | Multiple models as independent reviewers with consensus voting |
+| **Configurable Limits** | Adjustable literature retrieval and analysis parameters |
+
+---
+
+## Current Configuration
+
+| Parameter | Value |
+|---|---|
+| Initial PubMed Fetch | Up to **{MAX_ABSTRACTS_INITIAL}** abstracts |
+| Analysis Limit | Up to **{MAX_ABSTRACTS_ANALYZE}** relevant abstracts |
+| Search Terms | Up to **{MAX_SEARCH_TERMS}** synonyms |
+| Parallel Processing | **{PARALLEL_PROCESSING_STATUS}** |
+| GPU Acceleration | **{GPU_ACCELERATION_STATUS}** ({GPU_COUNT} GPU(s) detected) |
+| MPI Support | **{MPI_SUPPORT_STATUS}** |
+
+---
+
+## How It Works
+
+The analysis pipeline follows five stages:
+
+1. **The Librarian** — Standardizes the chemical name via PubChem and fetches abstracts from PubMed using MeSH-aware queries
+2. **The Gatekeeper** — Filters abstracts for liver toxicity relevance using semantic analysis
+3. **The Analyst** — Analyzes each abstract against 12 Key Characteristics with evidence quotes and causal reasoning
+4. **Multi-Reviewer & Consensus** — Each selected model independently reviews all papers; results are consolidated using majority voting and ranked by consensus strength
+5. **The Architect** — Generates the Evidence Matrix heatmap, Causal Pathway Network, and PRISMA flow diagram
+
+---
+
+## Using the Interface
+
+### Step-by-Step
+
+1. **Enter a Chemical Name** — Type the chemical you want to analyze (e.g., `acetaminophen`, `carbon tetrachloride`)
+2. **Select Ollama Models** — Choose one or more models from the checkbox group. Selecting multiple models activates **Multi-Reviewer Mode**
+3. **Enable Optional Features:**
+   - *Risk-of-Bias Assessment* — Evaluates study quality for each paper
+   - *Certainty Grading* — Calculates certainty of evidence per Key Characteristic
+4. **Click "Analyze Chemical"** to start the systematic review
+5. **Review Results** across the output tabs:
+   - Analysis Summary
+   - Evidence Matrix Heatmap
+   - Mechanistic Pathway Network
+   - PRISMA 2020 Flow Diagram
+   - Risk-of-Bias Heatmap & Summary (if enabled)
+   - Evidence Profile Cards
+6. **Chat with Abstracts** — Use the chatbot tab to ask questions about the analyzed literature
+
+---
+
+## Multi-Reviewer Mode
+
+When you select two or more models, Multi-Reviewer Mode is activated:
+
+- **Higher reliability** through cross-model consensus
+- **Inter-model agreement** statistics (Cohen's kappa)
+- **Papers ranked** by consensus strength and evidence quality
+- **Identifies** high-confidence vs. disputed findings
+
+> **Note:** Multi-reviewer mode takes longer but provides significantly more reliable results.
+
+---
+
+## Advanced Configuration
+
+You can adjust parameters by setting environment variables before running the app:
+
+| Variable | Description | Default |
+|---|---|---|
+| `MAX_ABSTRACTS_INITIAL` | Initial PubMed fetch limit | {MAX_ABSTRACTS_INITIAL_DEFAULT} |
+| `MAX_ABSTRACTS_ANALYZE` | Analysis limit after relevance filtering | {MAX_ABSTRACTS_ANALYZE_DEFAULT} |
+| `LLM_TEMPERATURE` | LLM creativity/randomness (0.0 = deterministic) | {LLM_TEMPERATURE_DEFAULT} |
+| `ENTREZ_EMAIL` | Email for NCBI/PubMed API access | — |
+| `PROMPT_MODE` | Prompt strategy: `standard`, `enhanced`, or `liberal` | `enhanced` |
+
+Example:
+
+```
+MAX_ABSTRACTS_ANALYZE=30 LLM_TEMPERATURE=0.2 python app.py
+```
+
+---
+
+## Reference
+
+Rusyn, I. et al. (2021). Key Characteristics of Human Hepatotoxicants. *Toxicological Sciences*.
 """
 
 # Import enhanced modules
