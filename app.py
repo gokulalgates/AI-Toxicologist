@@ -171,7 +171,7 @@ from multi_reviewer import (
     consolidate_kc_analyses,
     rank_papers_by_consensus,
 )
-from plot_utils import save_all_plots
+from plot_utils import save_all_plots, save_plot
 from prisma import create_prisma_flow_diagram, generate_prisma_text_summary
 from provenance import (
     create_provenance_record,
@@ -577,7 +577,8 @@ def _rescue_kc_from_wrong_json(json_data: dict) -> dict:
         "kc2_status": ["apoptosis", "necrosis", "cell death", "hepatocyte death",
                        "cytotoxic", "liver injury", "hepatotoxic"],
         "kc3_status": ["proliferat", "regenerat", "cell division", "hyperplasia"],
-        "kc4_status": ["transport", "bsep", "mrp", "bile acid transport", "efflux", "uptake"],
+        "kc4_status": ["bile acid transport", "bsep", "mrp2", "mrp3", "mrp4", "oatp", "efflux pump",
+                       "transporter", "hepatic uptake", "canalicular transport", "abcb11", "abcc2"],
         "kc5_status": ["oxidative stress", "ros", "reactive oxygen", "glutathione",
                        "lipid peroxidation", "antioxidant", "redox"],
         "kc6_status": ["inflammat", "immune", "cytokine", "tnf", "interleukin",
@@ -595,7 +596,7 @@ def _rescue_kc_from_wrong_json(json_data: dict) -> dict:
                         "ppar", "lipidomic", "bile acid homeostasis"],
     }
 
-    rescued = dict(json_data)
+    rescued = {}
     for kc_key, keywords in KC_KEYWORDS.items():
         if any(kw in all_text for kw in keywords):
             rescued[kc_key] = "SUPPORTED"
@@ -1376,8 +1377,38 @@ Example correct format:
                             raise LLMParseError(f"Failed to parse LLM response: {json_error}") from parse_error
                         raise parse_error
 
-            # If no JSON was found at all, raise error
+            # If no JSON object {...} was found, try to rescue from array responses
             if json_match is None and result is None:
+                # Check if response is a JSON array (common LLM failure mode)
+                array_match = re.search(r'\[.*\]', cleaned_text, re.DOTALL)
+                if array_match:
+                    try:
+                        array_data = json.loads(array_match.group())
+                        if isinstance(array_data, list):
+                            if len(array_data) == 0:
+                                # Empty array [] - model returned nothing useful
+                                print("   ⚠️  LLM returned empty array []. Using keyword rescue from abstract text.")
+                                rescued = _rescue_kc_from_wrong_json({"abstract_text": text_to_analyze})
+                                result = KCAnalysis(**rescued)
+                            elif isinstance(array_data[0], dict):
+                                # Array of objects with wrong schema
+                                # e.g. [{"Key Characteristic": "...", "Assessment": "Yes/No", "Evidence": "..."}]
+                                print(f"   ⚠️  LLM returned array of {len(array_data)} objects instead of KC analysis dict. Attempting rescue from abstract text.")
+                                # Rescue by keyword-matching against the ORIGINAL abstract text
+                                # (the array content typically has wrong KC definitions)
+                                rescued = _rescue_kc_from_wrong_json({"abstract_text": text_to_analyze})
+                                result = KCAnalysis(**rescued)
+                    except Exception as array_err:
+                        print(f"   ⚠️  Array rescue also failed: {array_err}")
+                        # Final fallback: keyword rescue from the raw abstract text
+                        try:
+                            rescued = _rescue_kc_from_wrong_json({"abstract_text": text_to_analyze})
+                            result = KCAnalysis(**rescued)
+                            print("   ✓ Rescued KC statuses via keyword matching on abstract text")
+                        except Exception as rescue_err:
+                            print(f"   ⚠️  Keyword rescue failed: {rescue_err}")
+
+            if result is None and json_data is None:
                 print("No JSON object found in response")
                 if config.debug:
                     raise LLMParseError("No JSON object found in LLM response") from parse_error
@@ -1466,17 +1497,94 @@ Example correct format:
         print(error_msg)
         if config.debug:
             raise
-        # Return empty analysis on error (graceful degradation)
-        error_dict = dict.fromkeys(KC_DEFINITIONS.keys(), False) | {f"{kc.lower()}_status": "NOT_MENTIONED" for kc in KC_DEFINITIONS} | {"reasoning": f"Error: {str(e)}", "causal_links": [], "evidence_quotes": {}, "dose_response": []}
-        return error_dict, prompt_hash or "error"
+        # Rescue via keyword matching on the abstract text instead of returning all NOT_MENTIONED
+        print("   💡 Attempting keyword rescue from abstract text...")
+        rescued = _rescue_kc_from_wrong_json({"abstract_text": text_to_analyze})
+        rescued["reasoning"] = f"Keyword rescue (LLM failed: {str(e)[:100]}). " + rescued.get("reasoning", "")
+        for kc in KC_DEFINITIONS:
+            rescued[kc] = rescued.get(f"{kc.lower()}_status", "NOT_MENTIONED") in ["SUPPORTED", "ASSOCIATED", "CAUSALLY_LINKED"]
+        supported_count = sum(1 for kc in KC_DEFINITIONS if rescued.get(f"{kc.lower()}_status") == "SUPPORTED")
+        print(f"   ✓ Keyword rescue found {supported_count} supported KCs")
+        return rescued, prompt_hash or "error"
     except Exception as e:
         error_msg = f"Unexpected error analyzing abstract: {e}"
         print(error_msg)
         if config.debug:
             raise AnalysisError(error_msg) from e
-        # Return empty analysis on error
-        error_dict = dict.fromkeys(KC_DEFINITIONS.keys(), False) | {f"{kc.lower()}_status": "NOT_MENTIONED" for kc in KC_DEFINITIONS} | {"reasoning": f"Error: {str(e)}", "causal_links": [], "evidence_quotes": {}, "dose_response": []}
-        return error_dict, prompt_hash or "error"
+        # Rescue via keyword matching instead of returning all NOT_MENTIONED
+        print("   💡 Attempting keyword rescue from abstract text...")
+        rescued = _rescue_kc_from_wrong_json({"abstract_text": text_to_analyze})
+        rescued["reasoning"] = f"Keyword rescue (unexpected error: {str(e)[:100]}). " + rescued.get("reasoning", "")
+        for kc in KC_DEFINITIONS:
+            rescued[kc] = rescued.get(f"{kc.lower()}_status", "NOT_MENTIONED") in ["SUPPORTED", "ASSOCIATED", "CAUSALLY_LINKED"]
+        supported_count = sum(1 for kc in KC_DEFINITIONS if rescued.get(f"{kc.lower()}_status") == "SUPPORTED")
+        print(f"   ✓ Keyword rescue found {supported_count} supported KCs")
+        return rescued, prompt_hash or "error"
+
+
+def load_all_study_records(chemical_name: str, output_dir: str = "results") -> Tuple[List[Dict], List[Dict]]:
+    """
+    Load ALL study records from study_records.jsonl, deduplicated by PMID.
+    Returns (abstracts, kc_analyses) built from the full accumulated data.
+    Latest record per PMID wins (most recent extraction overwrites older ones).
+    """
+    safe_name = "".join(c for c in chemical_name if c.isalnum() or c in (' ', '-', '_')).strip()
+    safe_name = safe_name.replace(' ', '_')
+    jsonl_path = os.path.join(output_dir, safe_name, "study_records.jsonl")
+
+    if not os.path.exists(jsonl_path):
+        return [], []
+
+    records_by_pmid = {}
+    with open(jsonl_path, encoding='utf-8') as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                pmid = str(record.get("metadata", {}).get("pmid", "unknown"))
+                new_kc = record.get("kc_analysis", {})
+                new_evidence_count = sum(
+                    1 for i in range(1, 13)
+                    if new_kc.get(f"kc{i}_status", "NOT_MENTIONED") != "NOT_MENTIONED"
+                )
+                if pmid in records_by_pmid:
+                    old_kc = records_by_pmid[pmid].get("kc_analysis", {})
+                    old_evidence_count = sum(
+                        1 for i in range(1, 13)
+                        if old_kc.get(f"kc{i}_status", "NOT_MENTIONED") != "NOT_MENTIONED"
+                    )
+                    if new_evidence_count >= old_evidence_count:
+                        records_by_pmid[pmid] = record
+                else:
+                    records_by_pmid[pmid] = record
+            except (json.JSONDecodeError, Exception):
+                continue
+
+    abstracts = []
+    kc_analyses = []
+    for pmid, record in records_by_pmid.items():
+        meta = record.get("metadata", {})
+        kc = record.get("kc_analysis", {})
+
+        has_any_evidence = any(
+            kc.get(f"kc{i}_status", "NOT_MENTIONED") != "NOT_MENTIONED"
+            for i in range(1, 13)
+        )
+        if not has_any_evidence and not kc.get("causal_links"):
+            continue
+
+        abstracts.append({
+            "pmid": meta.get("pmid", pmid),
+            "title": meta.get("title", ""),
+            "abstract": meta.get("abstract", ""),
+            "authors": meta.get("authors", ""),
+            "journal": meta.get("journal", ""),
+            "year": meta.get("year", ""),
+        })
+        kc_analyses.append(kc)
+
+    return abstracts, kc_analyses
 
 
 def create_evidence_matrix(abstracts: List[Dict], kc_analyses: List[Dict]) -> pd.DataFrame:
@@ -2403,16 +2511,45 @@ The abstracts may discuss other aspects (e.g., cancer efficacy, metabolism elsew
         step_start = time.time()
 
         print("   🎨 Creating visualizations...")
+
+        # Merge current-run analyses with ALL historical study records (deduplicated by PMID)
+        viz_abstracts = list(abstracts)
+        viz_kc_analyses = list(kc_analyses)
+        try:
+            hist_abstracts, hist_kc_analyses = load_all_study_records(chemical_name)
+            if hist_abstracts:
+                current_pmids = {str(ab.get("pmid", "")) for ab in abstracts}
+                merged_count = 0
+                for hab, hkc in zip(hist_abstracts, hist_kc_analyses):
+                    pmid = str(hab.get("pmid", ""))
+                    if pmid not in current_pmids:
+                        viz_abstracts.append(hab)
+                        viz_kc_analyses.append(hkc)
+                        current_pmids.add(pmid)
+                        merged_count += 1
+                    else:
+                        # Replace current-run record if historical one has more evidence
+                        idx = next((i for i, ab in enumerate(viz_abstracts) if str(ab.get("pmid", "")) == pmid), None)
+                        if idx is not None and idx < len(viz_kc_analyses):
+                            cur_evidence = sum(1 for i in range(1, 13) if viz_kc_analyses[idx].get(f"kc{i}_status", "NOT_MENTIONED") != "NOT_MENTIONED")
+                            hist_evidence = sum(1 for i in range(1, 13) if hkc.get(f"kc{i}_status", "NOT_MENTIONED") != "NOT_MENTIONED")
+                            if hist_evidence > cur_evidence:
+                                viz_kc_analyses[idx] = hkc
+                if merged_count > 0:
+                    print(f"      ℹ️  Merged {merged_count} historical study records for richer visualization")
+        except Exception as e:
+            print(f"      ⚠️  Could not load historical records: {e}")
+
         print("      • Evidence Matrix Heatmap...")
-        print(f"         Creating matrix for {len(abstracts)} abstracts and {len(kc_analyses)} analyses...")
-        evidence_matrix = create_evidence_matrix(abstracts, kc_analyses)
+        print(f"         Creating matrix for {len(viz_abstracts)} abstracts and {len(viz_kc_analyses)} analyses...")
+        evidence_matrix = create_evidence_matrix(viz_abstracts, viz_kc_analyses)
         print(f"         Matrix created: {len(evidence_matrix)} rows, {len(evidence_matrix.columns)} columns")
         print(f"         KC columns: {[col for col in evidence_matrix.columns if col.startswith('KC')]}")
         print("         Generating heatmap visualization...")
         heatmap_fig = create_heatmap(evidence_matrix)
         print("         ✓ Heatmap created")
         print("      • Causal Pathway Network...")
-        network_fig = create_network_graph(kc_analyses, rob_assessments if enable_rob else None)
+        network_fig = create_network_graph(viz_kc_analyses, rob_assessments if enable_rob else None)
         print("      • PRISMA Flow Diagram...")
         prisma_fig = create_prisma_flow_diagram(prisma_record)
 
@@ -2484,13 +2621,13 @@ The abstracts may discuss other aspects (e.g., cancer efficacy, metabolism elsew
         print("✅ ANALYSIS COMPLETE")
         print("="*80)
 
-        # Calculate summary statistics
-        total_papers = len(abstracts)
-        kc_supported = {kc: sum(1 for analysis in kc_analyses
+        # Calculate summary statistics using merged data (viz_kc_analyses has historical + current)
+        total_papers = len(viz_abstracts)
+        kc_supported = {kc: sum(1 for analysis in viz_kc_analyses
                                 if analysis.get(f"{kc.lower()}_status", "NOT_MENTIONED") in ["SUPPORTED", "ASSOCIATED", "CAUSALLY_LINKED"])
                         for kc in KC_DEFINITIONS}
-        total_causal_links = sum(len(analysis.get("causal_links", [])) for analysis in kc_analyses)
-        total_quotes = sum(len(quotes) for analysis in kc_analyses
+        total_causal_links = sum(len(analysis.get("causal_links", [])) for analysis in viz_kc_analyses)
+        total_quotes = sum(len(quotes) for analysis in viz_kc_analyses
                           for quotes in analysis.get("evidence_quotes", {}).values())
 
         print("📊 Summary Statistics:")
@@ -2512,7 +2649,7 @@ The abstracts may discuss other aspects (e.g., cancer efficacy, metabolism elsew
 
         # Create summary text with enhanced statistics
         # (total_papers, kc_supported, total_causal_links, total_quotes already calculated above)
-        kc_refuted = {kc: sum(1 for analysis in kc_analyses
+        kc_refuted = {kc: sum(1 for analysis in viz_kc_analyses
                               if analysis.get(f"{kc.lower()}_status", "NOT_MENTIONED") == "REFUTED")
                       for kc in KC_DEFINITIONS}
 
@@ -2942,6 +3079,14 @@ Abstract:
                                     else:
                                         relative_plots[plot_type] = {'png': plot_path}
 
+                        # Load kc_analyses from study records for persistence
+                        kc_analyses_to_save = []
+                        try:
+                            _, loaded_kc = load_all_study_records(chemical_name)
+                            kc_analyses_to_save = loaded_kc
+                        except Exception:
+                            pass
+
                         # Save complete analysis results
                         results_file = os.path.join(results_dir, "analysis_results.json")
                         results_data = {
@@ -2950,7 +3095,8 @@ Abstract:
                             "num_abstracts": len(abstracts),
                             "summary_text": summary_text or "",
                             "evidence_profiles": evidence_profiles or "",
-                            "saved_plots": relative_plots
+                            "saved_plots": relative_plots,
+                            "kc_analyses": kc_analyses_to_save
                         }
 
                         # Save RoB table if available
@@ -3009,6 +3155,7 @@ Abstract:
                         summary_text = results_data.get("summary_text", "")
                         evidence_profiles = results_data.get("evidence_profiles", "")
                         saved_plots = results_data.get("saved_plots", {})
+                        chemical_name = results_data.get("chemical_name", "")
 
                         # Load plots from saved files
                         import matplotlib.image as mpimg
@@ -3022,31 +3169,61 @@ Abstract:
                         rob_heatmap_fig = None
                         rob_summary_fig = None
 
+                        # Try to regenerate heatmap and network from stored kc_analyses or study records
+                        kc_analyses_stored = results_data.get("kc_analyses", [])
+                        if not kc_analyses_stored and chemical_name:
+                            try:
+                                _, kc_analyses_stored = load_all_study_records(chemical_name)
+                            except Exception:
+                                pass
+
+                        if kc_analyses_stored:
+                            # Filter to records with actual evidence
+                            viz_abs = []
+                            viz_kc = []
+                            for i, kc in enumerate(kc_analyses_stored):
+                                has_evidence = any(
+                                    kc.get(f"kc{j}_status", "NOT_MENTIONED") != "NOT_MENTIONED"
+                                    for j in range(1, 13)
+                                )
+                                if has_evidence or kc.get("causal_links"):
+                                    ab = abstracts[i] if i < len(abstracts) else {"pmid": f"Study_{i+1}", "title": ""}
+                                    viz_abs.append(ab)
+                                    viz_kc.append(kc)
+
+                            if viz_abs:
+                                try:
+                                    evidence_matrix = create_evidence_matrix(viz_abs, viz_kc)
+                                    heatmap_fig = create_heatmap(evidence_matrix)
+                                    print(f"   ✓ Regenerated evidence matrix from {len(viz_abs)} studies with evidence")
+                                except Exception as e:
+                                    print(f"   ⚠️  Could not regenerate heatmap: {e}")
+
+                                try:
+                                    network_fig = create_network_graph(viz_kc)
+                                    print(f"   ✓ Regenerated causal pathway network from {len(viz_kc)} studies")
+                                except Exception as e:
+                                    print(f"   ⚠️  Could not regenerate network: {e}")
+
                         # Helper function to resolve plot path (handle relative paths)
                         def resolve_plot_path(path):
                             if not path:
                                 return None
-                            # If absolute path, use as-is
                             if os.path.isabs(path):
                                 return path if os.path.exists(path) else None
-                            # If relative, try multiple locations
-                            # 1. Relative to results_dir (e.g., "plots/file.png")
                             full_path = os.path.join(results_dir, path)
                             if os.path.exists(full_path):
                                 return full_path
-                            # 2. Relative to plots_dir (if path is just filename)
                             filename = os.path.basename(path)
                             full_path = os.path.join(plots_dir, filename)
                             if os.path.exists(full_path):
                                 return full_path
-                            # 3. Try in plots_dir with full relative path
                             if path.startswith("plots/"):
                                 full_path = os.path.join(results_dir, path)
                                 if os.path.exists(full_path):
                                     return full_path
                             return None
 
-                        # Load images as figures
                         def load_image_as_figure(img_path):
                             resolved_path = resolve_plot_path(img_path) if img_path else None
                             if resolved_path is None:
@@ -3062,7 +3239,7 @@ Abstract:
                                 print(f"Warning: Could not load image {resolved_path}: {e}")
                                 return None
 
-                        # Try to load from saved_plots first
+                        # Fall back to saved plot images for any plots we couldn't regenerate
                         plot_files = {}
                         for plot_type in ['heatmap', 'network', 'prisma', 'rob_heatmap', 'rob_summary']:
                             if plot_type in saved_plots and 'png' in saved_plots[plot_type]:
@@ -3071,15 +3248,11 @@ Abstract:
                                 if resolved:
                                     plot_files[plot_type] = resolved
 
-                        # If missing plots, search for them in plots directory
                         if os.path.exists(plots_dir):
-                            # Find most recent files for missing plot types
                             all_files = sorted([f for f in os.listdir(plots_dir) if f.endswith('.png')], reverse=True)
-
                             for filename in all_files:
                                 filepath = os.path.join(plots_dir, filename)
                                 filename_lower = filename.lower()
-
                                 if 'heatmap' in filename_lower and 'evidence' in filename_lower and 'heatmap' not in plot_files:
                                     plot_files['heatmap'] = filepath
                                 elif ('network' in filename_lower or 'causal' in filename_lower) and 'network' not in plot_files:
@@ -3091,9 +3264,11 @@ Abstract:
                                 elif 'rob' in filename_lower and 'summary' in filename_lower and 'rob_summary' not in plot_files:
                                     plot_files['rob_summary'] = filepath
 
-                        # Load all plots
-                        heatmap_fig = load_image_as_figure(plot_files.get('heatmap'))
-                        network_fig = load_image_as_figure(plot_files.get('network'))
+                        # Only load from PNG if we didn't regenerate from data
+                        if heatmap_fig is None:
+                            heatmap_fig = load_image_as_figure(plot_files.get('heatmap'))
+                        if network_fig is None:
+                            network_fig = load_image_as_figure(plot_files.get('network'))
                         prisma_fig = load_image_as_figure(plot_files.get('prisma'))
                         rob_heatmap_fig = load_image_as_figure(plot_files.get('rob_heatmap'))
                         rob_summary_fig = load_image_as_figure(plot_files.get('rob_summary'))
@@ -3130,41 +3305,49 @@ Abstract:
 
                         import pandas as pd
 
-                        # Load abstracts from study_records.jsonl
-                        abstracts = []
-                        rob_data = []
+                        # Load records from study_records.jsonl, deduplicated by PMID
+                        records_by_pmid = {}
                         with open(records_file, encoding='utf-8') as f:
                             for line in f:
-                                if line.strip():
-                                    try:
-                                        record = json.loads(line)
-                                        metadata = record.get('metadata', {})
+                                if not line.strip():
+                                    continue
+                                try:
+                                    record = json.loads(line)
+                                    pmid = str(record.get('metadata', {}).get('pmid', 'unknown'))
+                                    records_by_pmid[pmid] = record
+                                except Exception:
+                                    continue
 
-                                        abstract_data = {
-                                            "pmid": metadata.get('pmid', 'unknown'),
-                                            "title": metadata.get('title', ''),
-                                            "abstract": metadata.get('abstract', ''),
-                                            "authors": metadata.get('authors', ''),
-                                            "journal": metadata.get('journal', ''),
-                                            "year": metadata.get('year', ''),
-                                            "fulltext": record.get('fulltext', '')
-                                        }
+                        abstracts = []
+                        kc_analyses_data = []
+                        rob_data = []
+                        for pmid, record in records_by_pmid.items():
+                            metadata = record.get('metadata', {})
+                            kc_analysis = record.get('kc_analysis', {})
 
-                                        if abstract_data.get('title') or abstract_data.get('abstract'):
-                                            abstracts.append(abstract_data)
+                            abstract_data = {
+                                "pmid": metadata.get('pmid', pmid),
+                                "title": metadata.get('title', ''),
+                                "abstract": metadata.get('abstract', ''),
+                                "authors": metadata.get('authors', ''),
+                                "journal": metadata.get('journal', ''),
+                                "year": metadata.get('year', ''),
+                                "fulltext": record.get('fulltext', '')
+                            }
 
-                                        # Extract RoB data
-                                        rob = record.get('risk_of_bias', {})
-                                        if rob:
-                                            rob_data.append({
-                                                "Study #": len(rob_data) + 1,
-                                                "PMID": metadata.get('pmid', 'unknown'),
-                                                "Title": metadata.get('title', '')[:80] + "..." if len(metadata.get('title', '')) > 80 else metadata.get('title', ''),
-                                                "Overall Judgment": rob.get('overall_judgment', 'Unknown'),
-                                                "Full-text": "Yes" if record.get('fulltext') else "No"
-                                            })
-                                    except:
-                                        continue
+                            if abstract_data.get('title') or abstract_data.get('abstract'):
+                                abstracts.append(abstract_data)
+                                kc_analyses_data.append(kc_analysis)
+
+                            rob = record.get('risk_of_bias', {})
+                            if rob:
+                                rob_data.append({
+                                    "Study #": len(rob_data) + 1,
+                                    "PMID": metadata.get('pmid', pmid),
+                                    "Title": metadata.get('title', '')[:80] + "..." if len(metadata.get('title', '')) > 80 else metadata.get('title', ''),
+                                    "Overall Judgment": rob.get('overall_judgment', 'Unknown'),
+                                    "Full-text": "Yes" if record.get('fulltext') else "No"
+                                })
 
                         if len(abstracts) == 0:
                             return False
@@ -3179,9 +3362,46 @@ Abstract:
                                 "num_abstracts": len(abstracts)
                             }, f, indent=2, ensure_ascii=False)
 
-                        # Find plot files (use relative paths)
+                        # Regenerate plots from actual KC analysis data
                         plots_dir = os.path.join(results_dir, "plots")
+                        os.makedirs(plots_dir, exist_ok=True)
                         saved_plots = {}
+
+                        # Filter to records that have actual evidence for visualization
+                        viz_abstracts = []
+                        viz_kc = []
+                        for ab, kc in zip(abstracts, kc_analyses_data):
+                            has_evidence = any(
+                                kc.get(f"kc{i}_status", "NOT_MENTIONED") != "NOT_MENTIONED"
+                                for i in range(1, 13)
+                            )
+                            if has_evidence or kc.get("causal_links"):
+                                viz_abstracts.append(ab)
+                                viz_kc.append(kc)
+
+                        if viz_abstracts:
+                            try:
+                                evidence_matrix = create_evidence_matrix(viz_abstracts, viz_kc)
+                                heatmap_fig = create_heatmap(evidence_matrix)
+                                heatmap_paths = save_plot(heatmap_fig, "evidence_matrix_heatmap",
+                                                         output_dir=results_dir)
+                                if 'png' in heatmap_paths:
+                                    saved_plots['heatmap'] = {'png': os.path.relpath(heatmap_paths['png'], results_dir)}
+                                plt.close(heatmap_fig)
+                            except Exception as e:
+                                print(f"      ⚠️  Could not regenerate heatmap: {e}")
+
+                            try:
+                                network_fig = create_network_graph(viz_kc)
+                                network_paths = save_plot(network_fig, "causal_pathway_network",
+                                                         output_dir=results_dir)
+                                if 'png' in network_paths:
+                                    saved_plots['network'] = {'png': os.path.relpath(network_paths['png'], results_dir)}
+                                plt.close(network_fig)
+                            except Exception as e:
+                                print(f"      ⚠️  Could not regenerate network: {e}")
+
+                        # Fall back to existing plot files for any missing plot types
                         if os.path.exists(plots_dir):
                             plot_files = sorted(os.listdir(plots_dir), reverse=True)
                             for filename in plot_files:
@@ -3206,19 +3426,35 @@ Abstract:
                             try:
                                 rob_df = pd.DataFrame(rob_data)
                                 rob_df.to_json(rob_table_file, orient='records', indent=2)
-                            except:
+                            except Exception:
                                 pass
 
-                        # Generate basic summary
+                        # Generate summary with real KC stats
+                        kc_supported = {}
+                        for kc in KC_DEFINITIONS:
+                            count = sum(1 for analysis in kc_analyses_data
+                                        if analysis.get(f"{kc.lower()}_status", "NOT_MENTIONED") in ["SUPPORTED", "ASSOCIATED", "CAUSALLY_LINKED"])
+                            kc_supported[kc] = count
+                        total_causal = sum(len(a.get("causal_links", [])) for a in kc_analyses_data)
+
+                        kc_lines = []
+                        for kc in KC_DEFINITIONS:
+                            kc_lines.append(f"  {kc} ({KC_NAMES[kc]}): {kc_supported[kc]}/{len(kc_analyses_data)} papers")
+
                         summary_text = f"""Chemical Analysis Summary
 {'='*60}
 Input Name: {chemical_name}
-Total Papers Analyzed: {len(abstracts)}
+Total Papers Analyzed: {len(abstracts)} (deduplicated from study_records.jsonl)
+Papers with Evidence: {len(viz_abstracts)}
+Total Causal Links: {total_causal}
+
+Key Characteristics Evidence:
+{chr(10).join(kc_lines)}
 
 Results saved to: {results_dir}/
 """
 
-                        # Save analysis results
+                        # Save analysis results including kc_analyses
                         results_file = os.path.join(results_dir, "analysis_results.json")
                         results_data = {
                             "chemical_name": chemical_name,
@@ -3227,13 +3463,14 @@ Results saved to: {results_dir}/
                             "summary_text": summary_text,
                             "evidence_profiles": "",
                             "saved_plots": saved_plots,
+                            "kc_analyses": kc_analyses_data,
                             "rob_table_file": "rob_table.json" if rob_table_file and os.path.exists(rob_table_file) else None
                         }
 
                         with open(results_file, 'w', encoding='utf-8') as f:
                             json.dump(results_data, f, indent=2, ensure_ascii=False)
 
-                        print(f"✅ Auto-prepared {chemical_name}: {len(abstracts)} abstracts")
+                        print(f"✅ Auto-prepared {chemical_name}: {len(abstracts)} abstracts, {len(viz_abstracts)} with evidence")
                         return True
                     except Exception as e:
                         print(f"Warning: Could not auto-prepare {chemical_name}: {e}")
