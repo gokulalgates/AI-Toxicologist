@@ -206,32 +206,41 @@ Analysis:
   - Reasoning: Antioxidant depletion indicates oxidative stress
 
 ### JSON OUTPUT REQUIREMENTS
-You must return a valid JSON object. Do not include markdown formatting (```json).
 
-**CRITICAL: Return KC Analysis, NOT Paper Metadata**
+⚠️ CRITICAL: Your response must be a JSON object with EXACTLY the keys below.
+Do NOT return paper metadata, chemical properties, study summaries, or any other format.
+Do NOT include markdown formatting (no ```json).
 
-DO NOT return paper metadata fields like:
-- Title, Authors, Journal, Year, Volume, Issue, Page
-- Abstract, Affiliations, Corresponding Author, Publication Year
+**The ONLY valid keys are:**
+- "kc1_status" through "kc12_status" — value must be one of: "SUPPORTED", "ASSOCIATED", "CAUSALLY_LINKED", "REFUTED", "NOT_MENTIONED"
+- "reasoning" — a plain string
+- "evidence_quotes" — dict mapping KC names to quote lists
+- "causal_links" — list of source/target objects
+- "dose_response" — list of strings
 
-YOU MUST return ONLY these fields:
-- "kc1_status", "kc2_status", "kc3_status", ... "kc12_status" (each with value: "SUPPORTED", "ASSOCIATED", "CAUSALLY_LINKED", "REFUTED", or "NOT_MENTIONED")
-- "reasoning" (as a STRING, not a list or dict)
-- "evidence_quotes" (as a dict: {{"KC1": ["quote1"], "KC5": ["quote2", "quote3"]}})
-- "causal_links" (as a list of objects: [{{"source": "KC1", "target": "KC5", "evidence": "quote...", "strength": "STRONG"}}])
-- "dose_response" (as a list of strings: ["50 mg/kg", "10-100 μM"])
+**WRONG (do not return this):**
+{{"persistent": true, "bioaccumulative": true, "oxidative_stress": true}}
+{{"title": "...", "authors": [...], "abstract": "..."}}
+{{"source": "study", "species": "rat", "duration": "28 days"}}
 
-**Example correct JSON structure:**
+**CORRECT (return exactly this structure):**
 {{
-  "kc1_status": "SUPPORTED",
-  "kc2_status": "NOT_MENTIONED",
+  "kc1_status": "NOT_MENTIONED",
+  "kc2_status": "SUPPORTED",
   "kc3_status": "NOT_MENTIONED",
-  ...
-  "kc12_status": "NOT_MENTIONED",
-  "reasoning": "KC1 is supported because...",
-  "evidence_quotes": {{"KC1": ["quote1", "quote2"]}},
-  "causal_links": [{{"source": "KC1", "target": "KC5", "evidence": "...", "strength": "STRONG"}}],
-  "dose_response": ["50 mg/kg"]
+  "kc4_status": "NOT_MENTIONED",
+  "kc5_status": "SUPPORTED",
+  "kc6_status": "NOT_MENTIONED",
+  "kc7_status": "SUPPORTED",
+  "kc8_status": "NOT_MENTIONED",
+  "kc9_status": "NOT_MENTIONED",
+  "kc10_status": "NOT_MENTIONED",
+  "kc11_status": "NOT_MENTIONED",
+  "kc12_status": "SUPPORTED",
+  "reasoning": "KC2 is supported because the abstract states hepatocyte necrosis was observed...",
+  "evidence_quotes": {{"KC2": ["hepatocyte necrosis was observed"], "KC5": ["oxidative stress markers elevated"]}},
+  "causal_links": [{{"source": "KC5", "target": "KC7", "evidence": "...", "strength": "MODERATE"}}],
+  "dose_response": ["10 mg/kg/day"]
 }}
 
 {format_instructions}"""

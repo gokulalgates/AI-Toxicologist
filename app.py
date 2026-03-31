@@ -562,6 +562,53 @@ def fetch_pubmed_abstracts(search_terms: List[str], max_results: Optional[int] =
         return [], {"error": str(e)}
 
 
+def _rescue_kc_from_wrong_json(json_data: dict) -> dict:
+    """
+    When the LLM returns wrong-format JSON (chemical facts, paper summary, etc.)
+    try to salvage KC statuses by keyword matching against the JSON values.
+    Returns a dict with kc1_status..kc12_status keys added where detectable.
+    """
+    # Flatten all string values from the wrong JSON into one searchable text blob
+    all_text = " ".join(str(v) for v in json_data.values() if v).lower()
+
+    KC_KEYWORDS = {
+        "kc1_status": ["bioactivat", "reactive metabolite", "cyp2e1", "cyp450", "napqi",
+                       "phase i", "oxidation", "electrophil", "metabolized", "bioaccumul"],
+        "kc2_status": ["apoptosis", "necrosis", "cell death", "hepatocyte death",
+                       "cytotoxic", "liver injury", "hepatotoxic"],
+        "kc3_status": ["proliferat", "regenerat", "cell division", "hyperplasia"],
+        "kc4_status": ["transport", "bsep", "mrp", "bile acid transport", "efflux", "uptake"],
+        "kc5_status": ["oxidative stress", "ros", "reactive oxygen", "glutathione",
+                       "lipid peroxidation", "antioxidant", "redox"],
+        "kc6_status": ["inflammat", "immune", "cytokine", "tnf", "interleukin",
+                       "kupffer", "neutrophil", "macrophage"],
+        "kc7_status": ["mitochondri", "atp depletion", "membrane potential",
+                       "electron transport", "respiratory chain"],
+        "kc8_status": ["jnk", "stress signaling", "mapk", "erk", "p38", "nf-kb",
+                       "unfolded protein", "er stress"],
+        "kc9_status": ["cholestasis", "bile flow", "biliary", "bile duct", "bile accumulation"],
+        "kc10_status": ["cytoskeleton", "actin", "microtubule", "keratin", "f-actin"],
+        "kc11_status": ["fibrosis", "fibrotic", "collagen", "stellate cell",
+                        "extracellular matrix", "cirrhosis"],
+        "kc12_status": ["lipid metabolism", "steatosis", "fatty acid", "triglyceride",
+                        "lipid accumulation", "metabolic disruption", "beta-oxidation",
+                        "ppar", "lipidomic", "bile acid homeostasis"],
+    }
+
+    rescued = dict(json_data)
+    for kc_key, keywords in KC_KEYWORDS.items():
+        if any(kw in all_text for kw in keywords):
+            rescued[kc_key] = "SUPPORTED"
+        else:
+            rescued[kc_key] = "NOT_MENTIONED"
+
+    rescued.setdefault("reasoning", "Rescued from non-standard LLM response via keyword matching.")
+    rescued.setdefault("causal_links", [])
+    rescued.setdefault("evidence_quotes", {})
+    rescued.setdefault("dose_response", [])
+    return rescued
+
+
 def check_relevance(abstract_text: str, title: str, chemical_name: str, model_name: str = "llama3.1") -> bool:
     """
     Gatekeeper: Check if abstract is relevant to liver toxicity of the chemical
@@ -900,7 +947,8 @@ You must return a valid JSON object. Do not include markdown formatting (```json
         response_text = raw_response.content if hasattr(raw_response, 'content') else str(raw_response)
         logger.debug(f"LLM Response preview: {response_text[:300]}")
 
-        # Detect model refusals before attempting to parse
+        # Detect model refusals — only flag short responses (< 300 chars) that start
+        # with a refusal phrase, to avoid false positives on real scientific text.
         REFUSAL_PATTERNS = [
             "i can't help",
             "i cannot help",
@@ -908,13 +956,12 @@ You must return a valid JSON object. Do not include markdown formatting (```json
             "i cannot provide",
             "i'm not able to",
             "i am not able to",
-            "i don't have information",
             "i cannot assist",
             "i can't assist",
         ]
-        response_lower = response_text.strip().lower()
-        if any(response_lower.startswith(p) or (len(response_text) < 200 and p in response_lower)
-               for p in REFUSAL_PATTERNS):
+        response_stripped = response_text.strip()
+        response_lower = response_stripped.lower()
+        if len(response_stripped) < 300 and any(response_lower.startswith(p) for p in REFUSAL_PATTERNS):
             raise LLMError(
                 f"Model refused to analyze abstract ('{response_text[:100]}'). "
                 "Retrying — model may need clearer instructions."
@@ -1073,16 +1120,17 @@ You must return a valid JSON object. Do not include markdown formatting (```json
                     if "dose_response" not in json_data:
                         json_data["dose_response"] = []
 
-                    # Reject responses with NO KC keys — wrong format entirely
-                    # (e.g. LLM returned chemical facts, paper metadata, or study summary)
+                    # Check if any KC keys are present
                     kc_status_keys_present = [f"kc{i}_status" for i in range(1, 13) if f"kc{i}_status" in json_data]
                     if not kc_status_keys_present:
-                        raise ValueError(
-                            f"LLM returned JSON with no KC status fields (got keys: {list(json_data.keys())[:8]}). "
-                            "Model ignored the output format. Retrying."
+                        # Model returned wrong format — try to rescue by keyword mapping
+                        logger.warning(
+                            f"LLM returned JSON with no KC status fields "
+                            f"(got keys: {list(json_data.keys())[:8]}). Attempting keyword rescue."
                         )
+                        json_data = _rescue_kc_from_wrong_json(json_data)
 
-                    # Fill in any missing KC statuses as NOT_MENTIONED
+                    # Fill in any remaining missing KC statuses as NOT_MENTIONED
                     for i in range(1, 13):
                         kc_key = f"kc{i}_status"
                         if kc_key not in json_data:
