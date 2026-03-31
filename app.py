@@ -696,20 +696,17 @@ def analyze_abstract_with_llm(abstract_text: str, title: str, model_name: str = 
                                any(apap_name in term for apap_name in acetaminophen_names for term in search_terms_lower))
 
             if is_acetaminophen:
-                print(f"   🔍 DEBUG: Acetaminophen detected! chemical_name='{chemical_name}', search_terms={search_terms}")
-                print(f"   🔍 DEBUG: Using prompt_mode='{prompt_mode}'")
+                logger.debug(f"Acetaminophen detected: chemical_name='{chemical_name}', prompt_mode='{prompt_mode}'")
                 if prompt_mode == "liberal":
                     # Use liberal mode for Acetaminophen if still missing mechanisms
                     base_prompt = get_liberal_prompt(kc_definitions_text, format_instructions_escaped, chemical_name)
                     # Add Acetaminophen context
                     acetaminophen_context = "\n\n### ACETAMINOPHEN CONTEXT: Known mechanisms include KC1 (NAPQI), KC2 (necrosis), KC5 (glutathione depletion), KC7 (mitochondrial dysfunction), KC8 (JNK signaling), KC12 (steatosis)."
                     base_prompt = base_prompt.replace(format_instructions_escaped, acetaminophen_context + "\n\n" + format_instructions_escaped)
-                    print("   🔍 DEBUG: Using liberal prompt with acetaminophen context")
                 else:
                     base_prompt = get_acetaminophen_specific_prompt(kc_definitions_text, format_instructions_escaped, chemical_name)
-                    print("   🔍 DEBUG: Using acetaminophen-specific prompt")
             else:
-                print(f"   🔍 DEBUG: Not acetaminophen. chemical_name='{chemical_name}', search_terms={search_terms}")
+                logger.debug(f"Prompt selection: chemical='{chemical_name}', mode='{prompt_mode}'")
                 if prompt_mode == "liberal":
                     # Use liberal prompt for other chemicals
                     base_prompt = get_liberal_prompt(kc_definitions_text, format_instructions_escaped, chemical_name)
@@ -901,7 +898,27 @@ You must return a valid JSON object. Do not include markdown formatting (```json
         })
 
         response_text = raw_response.content if hasattr(raw_response, 'content') else str(raw_response)
-        print(f"LLM Response preview: {response_text[:300]}...")
+        logger.debug(f"LLM Response preview: {response_text[:300]}")
+
+        # Detect model refusals before attempting to parse
+        REFUSAL_PATTERNS = [
+            "i can't help",
+            "i cannot help",
+            "i can't provide",
+            "i cannot provide",
+            "i'm not able to",
+            "i am not able to",
+            "i don't have information",
+            "i cannot assist",
+            "i can't assist",
+        ]
+        response_lower = response_text.strip().lower()
+        if any(response_lower.startswith(p) or (len(response_text) < 200 and p in response_lower)
+               for p in REFUSAL_PATTERNS):
+            raise LLMError(
+                f"Model refused to analyze abstract ('{response_text[:100]}'). "
+                "Retrying — model may need clearer instructions."
+            )
 
         # Clean response: Remove markdown code blocks if present
         # Remove markdown code fences
@@ -1056,7 +1073,16 @@ You must return a valid JSON object. Do not include markdown formatting (```json
                     if "dose_response" not in json_data:
                         json_data["dose_response"] = []
 
-                    # Ensure all KC statuses exist (extract what we can)
+                    # Reject responses with NO KC keys — wrong format entirely
+                    # (e.g. LLM returned chemical facts, paper metadata, or study summary)
+                    kc_status_keys_present = [f"kc{i}_status" for i in range(1, 13) if f"kc{i}_status" in json_data]
+                    if not kc_status_keys_present:
+                        raise ValueError(
+                            f"LLM returned JSON with no KC status fields (got keys: {list(json_data.keys())[:8]}). "
+                            "Model ignored the output format. Retrying."
+                        )
+
+                    # Fill in any missing KC statuses as NOT_MENTIONED
                     for i in range(1, 13):
                         kc_key = f"kc{i}_status"
                         if kc_key not in json_data:
