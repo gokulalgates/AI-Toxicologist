@@ -231,6 +231,19 @@ from prompt_templates import get_prompt_for_abstract
 from rag_system import add_to_example_database, get_rag_system
 from utils import retry_with_backoff
 
+# Optional DSPy optimized classifier (Phase 1 RL)
+_dspy_classifier = None
+_dspy_available = False
+try:
+    from dspy_optimizer import (
+        is_optimized_program_available,
+        load_optimized_program,
+        predict_with_optimized,
+    )
+    _dspy_available = True
+except ImportError:
+    pass  # DSPy not installed — use standard prompts
+
 # Optional MPI support
 try:
     from mpi_support import get_mpi_rank, get_mpi_size, is_mpi_available, print_mpi_info
@@ -253,6 +266,7 @@ config = get_config()
 # Set up logging
 logger = logging.getLogger(__name__)
 if not logger.handlers:
+
     handler = logging.StreamHandler()
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -261,6 +275,23 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.INFO if not config.debug else logging.DEBUG)
+
+# Load DSPy optimized classifier if available (Phase 1 RL)
+def _load_dspy_classifier():
+    global _dspy_classifier
+    if not _dspy_available:
+        return
+    if not is_optimized_program_available():
+        return
+    try:
+        model_name = config.llm.model_name
+        _dspy_classifier = load_optimized_program(model_name)
+        if _dspy_classifier:
+            print(f"✅ DSPy optimized KC classifier loaded (model: {model_name})")
+    except Exception as e:
+        logger.warning(f"Could not load DSPy classifier: {e}")
+
+_load_dspy_classifier()
 
 # Only override if not set via environment variable
 if os.getenv("MAX_ABSTRACTS_ANALYZE") is None:
@@ -609,6 +640,20 @@ def analyze_abstract_with_llm(abstract_text: str, title: str, model_name: str = 
         LLMError: If LLM processing fails after retries
         LLMParseError: If response parsing fails
     """
+    # --- Phase 1 RL: Try DSPy optimized classifier first ---
+    if _dspy_classifier is not None and chemical_name:
+        try:
+            dspy_kcs = predict_with_optimized(_dspy_classifier, abstract_text, chemical_name)
+            if dspy_kcs and len(dspy_kcs) >= 12:
+                print(f"   🤖 DSPy optimized classifier used for '{title[:50]}'")
+                result_dict = {f"kc{i}_status": dspy_kcs.get(f"KC{i}", "NOT_MENTIONED") for i in range(1, 13)}
+                result_dict.update({"reasoning": "DSPy optimized classifier", "causal_links": [], "evidence_quotes": {}, "dose_response": []})
+                prompt_hash_val = prompt_hash or "dspy_optimized"
+                return result_dict, prompt_hash_val
+        except Exception as e:
+            logger.warning(f"DSPy classifier failed, falling back to standard pipeline: {e}")
+    # --------------------------------------------------------
+
     try:
         llm = ChatOllama(
             model=model_name,
@@ -2570,6 +2615,68 @@ def create_interface():
                         )
 
                 analyze_btn = gr.Button("🔍 Analyze Chemical", variant="primary", size="lg")
+
+                with gr.Accordion("🤖 RL Prompt Optimization (Phase 1)", open=False):
+                    dspy_status = gr.Textbox(
+                        label="Optimizer Status",
+                        value=(
+                            "✅ Optimized prompts loaded — using DSPy classifier"
+                            if _dspy_classifier is not None
+                            else ("⚙️ DSPy installed — run optimization to improve KC accuracy"
+                                  if _dspy_available
+                                  else "ℹ️ Install dspy-ai to enable prompt optimization")
+                        ),
+                        interactive=False,
+                        lines=1,
+                    )
+                    with gr.Row():
+                        optimize_btn = gr.Button(
+                            "⚡ Optimize Prompts",
+                            variant="secondary",
+                            interactive=_dspy_available,
+                        )
+                        optimizer_choice = gr.Radio(
+                            choices=["bootstrap", "mipro"],
+                            value="bootstrap",
+                            label="Optimizer",
+                            info="bootstrap=fast (~5 min), mipro=thorough (~30 min)",
+                        )
+                    optimize_output = gr.Textbox(
+                        label="Optimization Log", lines=6, interactive=False
+                    )
+
+                    def run_prompt_optimization(model_list, opt_type):
+                        if not _dspy_available:
+                            return "❌ dspy-ai not installed. Run: pip install dspy-ai"
+                        try:
+                            from dspy_optimizer import run_optimization, save_optimized_program
+                            from training_data_builder import load_training_examples
+                            examples = load_training_examples()
+                            if not examples:
+                                return "❌ No training examples found. Analyze some chemicals first."
+                            model = model_list[0] if model_list else "llama3.2"
+                            log = [f"Starting optimization with {len(examples)} examples on {model}..."]
+                            optimized, score = run_optimization(
+                                training_examples=examples,
+                                model_name=model,
+                                optimizer_type=opt_type,
+                            )
+                            save_optimized_program(optimized, score, {"model": model, "optimizer": opt_type})
+                            _load_dspy_classifier()
+                            log.append(f"✅ Done! Score: {score:.3f}")
+                            log.append("Optimized prompts saved and loaded. Restart app to apply.")
+                            return "\n".join(log)
+                        except Exception as e:
+                            return f"❌ Optimization failed: {e}"
+
+                    optimize_btn.click(
+                        fn=run_prompt_optimization,
+                        inputs=[
+                            gr.State(config.llm.default_models),
+                            optimizer_choice,
+                        ],
+                        outputs=optimize_output,
+                    )
 
                 gr.Markdown("---")
 

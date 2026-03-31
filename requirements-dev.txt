@@ -1,6 +1,10 @@
 # Development dependencies for code quality tools
 # Install with: pip install -r requirements-dev.txt
 
+# Phase 1 RL — DSPy prompt optimization (optional, install separately)
+# pip install dspy-ai
+# dspy-ai>=2.4.0
+
 # Linting and code formatting
 ruff>=0.1.0  # Fast Python linter and formatter (replaces flake8, isort, black)
 isort>=5.12.0  # Alternative import sorter (ruff can also handle this)
